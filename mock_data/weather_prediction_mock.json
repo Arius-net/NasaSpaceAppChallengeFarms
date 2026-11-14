@@ -1,0 +1,190 @@
+{
+  "metadata": {
+    "proyecto": "K'INAL - Decision Support System",
+    "region": "La Frailesca, Chiapas (Núcleo: Villaflores, Villa Corzo, La Concordia)",
+    "crs": "EPSG:4326",
+    "bbox_referencia": {
+      "lon_min": -93.771,
+      "lat_min": 15.6645,
+      "lon_max": -92.2955,
+      "lat_max": 16.5858
+    },
+    "fuentes_integradas": [
+      "NASA POWER (AG Community - PRECTOTCORR, T2M, RH2M, GWETTOP, GWETROOT)",
+      "NASA SMAP L3 (SPL3SMP_E - Humedad Superficial 9km)",
+      "NASA SMAP L4 (SPL4SMGP - Humedad Zona Radicular)",
+      "GPM IMERG Early/Late (Precipitación satelital)"
+    ],
+    "umbrales_agronomicos": {
+      "sm_superficial_siembra_min_vv": 0.25,
+      "sm_radicular_reserva_min_vv": 0.20,
+      "sm_radicular_estres_critico_vv": 0.15
+    },
+    "data_vintage": "2026-05-20T00:00:00Z"
+  },
+  "resumen_actual": {
+    "fecha_evaluacion": "2026-05-20",
+    "municipio_estimado": "Villaflores",
+    "cultivo": "Maíz de temporal (secano)",
+    "precipitacion_acumulada_3d_mm": 38.4,
+    "precipitacion_acumulada_7d_mm": 54.1,
+    "temperatura_media_c": 26.4,
+    "humedad_relativa_pct": 78.5,
+    "sm_superficial_v_v": 0.28,
+    "sm_radicular_v_v": 0.22,
+    "prediccion_gwetroot_7d_xgboost": 0.24,
+    "decision_siembra": {
+      "estado": "SEMBRAR",
+      "codigo_color": "signal",
+      "hex_sugerido": "#2F5D50",
+      "confianza": "ALTA",
+      "confianza_pct": 86.5,
+      "explicacion_productor": "Lluvias establecidas y tierra con buena humedad en superficie y raíz. Ventana segura para sembrar esta semana sin riesgo de falso inicio.",
+      "explicacion_tecnico": "SM superficial (0.28 cm³/cm³ >= 0.25) supera umbral de germinación y SM radicular (0.22 cm³/cm³ >= 0.20) confirma reserva hídrica con tendencia positiva a 7 días (XGBoost: 0.24)."
+    },
+    "alerta_sequia": {
+      "estado": "ÓPTIMO",
+      "riesgo_canicula": "MODERADO (Julio-Agosto)",
+      "mensaje": "Sin déficit hídrico activo en zona radicular."
+    },
+    "micro_zonificacion": {
+      "cluster_id": 1,
+      "etiqueta_llm": "Valle Templado (Segura)",
+      "ndvi_estimado": 0.58,
+      "lst_estimado_c": 29.8,
+      "elevacion_m": 610
+    }
+  },
+  "serie_temporal_diaria": [
+    {
+      "fecha": "2026-05-14",
+      "tipo": "historico_observado",
+      "precipitacion_mm": 0.5,
+      "temp_max_c": 34.1,
+      "temp_min_c": 21.0,
+      "temp_media_c": 27.8,
+      "humedad_relativa_pct": 62.1,
+      "sm_superficial_v_v": 0.14,
+      "sm_radicular_v_v": 0.16,
+      "recomendacion_siembra": "ESPERAR (Suelo Seco)",
+      "alerta_sequia": "PRECAUCIÓN: Bajando reserva"
+    },
+    {
+      "fecha": "2026-05-15",
+      "tipo": "historico_observado",
+      "precipitacion_mm": 14.2,
+      "temp_max_c": 32.0,
+      "temp_min_c": 20.8,
+      "temp_media_c": 26.5,
+      "humedad_relativa_pct": 71.4,
+      "sm_superficial_v_v": 0.25,
+      "sm_radicular_v_v": 0.17,
+      "recomendacion_siembra": "ESPERAR (Falso Inicio / Poca Reserva)",
+      "alerta_sequia": "PRECAUCIÓN: Bajando reserva"
+    },
+    {
+      "fecha": "2026-05-16",
+      "tipo": "historico_observado",
+      "precipitacion_mm": 1.5,
+      "temp_max_c": 33.2,
+      "temp_min_c": 21.2,
+      "temp_media_c": 27.1,
+      "humedad_relativa_pct": 68.0,
+      "sm_superficial_v_v": 0.22,
+      "sm_radicular_v_v": 0.17,
+      "recomendacion_siembra": "ESPERAR (Suelo Seco)",
+      "alerta_sequia": "PRECAUCIÓN: Bajando reserva"
+    },
+    {
+      "fecha": "2026-05-17",
+      "tipo": "historico_observado",
+      "precipitacion_mm": 0.0,
+      "temp_max_c": 34.5,
+      "temp_min_c": 21.5,
+      "temp_media_c": 28.0,
+      "humedad_relativa_pct": 64.2,
+      "sm_superficial_v_v": 0.19,
+      "sm_radicular_v_v": 0.16,
+      "recomendacion_siembra": "ESPERAR (Suelo Seco)",
+      "alerta_sequia": "PRECAUCIÓN: Bajando reserva"
+    },
+    {
+      "fecha": "2026-05-18",
+      "tipo": "historico_observado",
+      "precipitacion_mm": 11.8,
+      "temp_max_c": 30.4,
+      "temp_min_c": 20.5,
+      "temp_media_c": 25.8,
+      "humedad_relativa_pct": 76.0,
+      "sm_superficial_v_v": 0.26,
+      "sm_radicular_v_v": 0.19,
+      "recomendacion_siembra": "ESPERAR (Falso Inicio / Poca Reserva)",
+      "alerta_sequia": "PRECAUCIÓN: Bajando reserva"
+    },
+    {
+      "fecha": "2026-05-19",
+      "tipo": "historico_observado",
+      "precipitacion_mm": 18.2,
+      "temp_max_c": 29.1,
+      "temp_min_c": 19.9,
+      "temp_media_c": 24.9,
+      "humedad_relativa_pct": 81.2,
+      "sm_superficial_v_v": 0.29,
+      "sm_radicular_v_v": 0.21,
+      "recomendacion_siembra": "SEMBRAR",
+      "alerta_sequia": "ÓPTIMO"
+    },
+    {
+      "fecha": "2026-05-20",
+      "tipo": "actual",
+      "precipitacion_mm": 8.4,
+      "temp_max_c": 30.2,
+      "temp_min_c": 20.1,
+      "temp_media_c": 26.4,
+      "humedad_relativa_pct": 78.5,
+      "sm_superficial_v_v": 0.28,
+      "sm_radicular_v_v": 0.22,
+      "recomendacion_siembra": "SEMBRAR",
+      "alerta_sequia": "ÓPTIMO"
+    },
+    {
+      "fecha": "2026-05-21",
+      "tipo": "prediccion_ml",
+      "precipitacion_mm": 12.0,
+      "temp_max_c": 29.8,
+      "temp_min_c": 20.0,
+      "temp_media_c": 25.6,
+      "humedad_relativa_pct": 80.0,
+      "sm_superficial_v_v": 0.30,
+      "sm_radicular_v_v": 0.23,
+      "recomendacion_siembra": "SEMBRAR",
+      "alerta_sequia": "ÓPTIMO"
+    },
+    {
+      "fecha": "2026-05-22",
+      "tipo": "prediccion_ml",
+      "precipitacion_mm": 6.5,
+      "temp_max_c": 30.5,
+      "temp_min_c": 20.3,
+      "temp_media_c": 26.1,
+      "humedad_relativa_pct": 77.4,
+      "sm_superficial_v_v": 0.29,
+      "sm_radicular_v_v": 0.23,
+      "recomendacion_siembra": "SEMBRAR",
+      "alerta_sequia": "ÓPTIMO"
+    },
+    {
+      "fecha": "2026-05-23",
+      "tipo": "prediccion_ml",
+      "precipitacion_mm": 15.3,
+      "temp_max_c": 28.9,
+      "temp_min_c": 19.8,
+      "temp_media_c": 24.8,
+      "humedad_relativa_pct": 83.1,
+      "sm_superficial_v_v": 0.32,
+      "sm_radicular_v_v": 0.24,
+      "recomendacion_siembra": "SEMBRAR",
+      "alerta_sequia": "ÓPTIMO"
+    }
+  ]
+}
