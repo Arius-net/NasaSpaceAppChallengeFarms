@@ -1,0 +1,112 @@
+# ============================================================
+# K'INAL — decision_thresholds.yaml
+# ÚNICA FUENTE DE VERDAD de los umbrales de decisión (decisión 0.2-B).
+#
+# Lo leen: services/decision_rules.py (motor fallback), el prompt del
+# LLM (se inyecta desde aquí) y la presentación de la API.
+#
+# REGLA: NO copiar estos números a mano en otros archivos.
+# ============================================================
+
+version: "0.4.0"
+fecha_revision: "2026-11-15"
+
+# ------------------------------------------------------------------
+# Estado de validación (Q-01 / ENTREGABLE D03) — VALIDADO en Fase 1
+# Técnica: onsets de lluvias Stern-Cooper (ventana 7 días >= 20 mm sin
+# pausa seca >= 10 días) año por año 2000-2025 -> 27/27 inicios
+# detectados. Umbrales = percentiles de GWET en ventana ±7 días del
+# onset con IC95 por bootstrap (1000 remuestreos, seed=42). El umbral
+# superficial se calibró además por costo asimétrico
+# (resembrar=3, sembrar tarde=1, acierto=0) sobre los 26 ciclos.
+# ------------------------------------------------------------------
+validated: true
+validacion:
+  tecnica: "onsets Stern-Cooper 2000-2025 (27/27 anios); umbrales p25 de GWET en ventana ±7d del onset con IC95 bootstrap(1000, seed=42); umbral superficial calibrado por costo asimétrico (resembrar=3, tarde=1)"
+  evidencia: "EV-0009: D02_notebooks/artifacts/{threshold_validation_summary.json, power_multianual_frailesca.csv, alert_thresholds_derivation.json}; serie cruda power_multianual_frailesca_raw.csv (9,811 dias)"
+  fecha_validacion: "2026-11-15"
+  ambito: "piloto La Frailesca (Villaflores 16.2333, -93.2667). Fuera del piloto los umbrales son EXTRAPOLACION pendiente de validacion regional"
+
+# Confianza máxima DENTRO del ámbito validado. El código (ai_advisor)
+# limita a MEDIA cualquier recomendación fuera del bbox del piloto.
+confianza_max: "ALTA"
+
+# ------------------------------------------------------------------
+# Humedad de suelo (decisión 1.1-A): escala NATIVA de NASA POWER.
+# GWETTOP / GWETROOT son fracción de saturación 0-1 y así se usan:
+# SIN conversión a cm³/cm³ (se eliminó el factor ×0.45 provisional).
+# Los umbrales de abajo están validados en esta misma escala (EV-0009).
+# ------------------------------------------------------------------
+humedad_suelo:
+  escala: "fracción de saturación 0-1 (escala nativa POWER/GLDAS)"
+  nota: "sin conversión a cm3/cm3 desde v0.3.0 (decisión 1.1-A)"
+
+# ------------------------------------------------------------------
+# Decisión 1 (DECISION_SPEC): fecha de siembra
+# Reglas UNIFICADAS (el prompt del LLM y el fallback derivan de aquí).
+# Evaluación en orden: sembrar -> falso_inicio -> suelo_seco.
+# ------------------------------------------------------------------
+siembra:
+  sembrar:
+    superficie_min: 0.47      # GWETTOP: calibrada por costo asimétrico 2000-2025 (p25 descriptivo de ventana onset = 0.3304)
+    radicular_min: 0.362      # GWETROOT p25 en ventana ±7d del onset (IC95 0.3577-0.3637)
+  falso_inicio:               # "ESPERAR (Falso Inicio / Poca Reserva)"
+    regla_a: "superficie >= 0.47 Y radicular < 0.362"   # superficie mojada, raíz aún sin reserva (fenómeno típico del onset)
+    regla_b: "superficie >= 0.44 Y radicular >= 0.332"  # banda de transición justa antes del umbral
+    superficie_min: 0.47
+    superficie_min_banda: 0.44          # superficie_min - 0.03 (banda operativa)
+    radicular_max: 0.362
+    radicular_transicion_min: 0.332     # radicular_min - 0.03
+  suelo_seco:                 # "ESPERAR (Suelo Seco)"
+    nota: "cualquier caso que no cumpla las dos reglas anteriores"
+
+# ------------------------------------------------------------------
+# Decisión 2 (DECISION_SPEC): alerta de sequía / estrés hídrico
+# Se evalúa con la humedad radicular (independiente de la siembra).
+# Coherencia exigida: estres_min <= radicular_min (un 'ALERTA' no puede
+# coexistir con suelo sembrable) — derivación en
+# artifacts/alert_thresholds_derivation.json.
+# ------------------------------------------------------------------
+alerta_sequia:
+  estres_min: 0.35            # mínimo histórico de canículas 2000-2025 (p0 de gwetroot_canicula_min): más seco que CUALQUIER canícula de los últimos 26 ciclos => ALERTA
+  precaucion_min: 0.362       # = radicular_min: PRECAUCIÓN cuando la reserva cae bajo el nivel sembrable; >= 0.362 => ÓPTIMO
+
+# ------------------------------------------------------------------
+# Grados-día de desarrollo (GDD) del maíz (decisión 3.5) — REFERENCIA
+# Base 10 °C. Valores de referencia internacional: ~2750 GDD °F
+# (base 50 °F = 10 °C) de siembra a madurez fisiológica del maíz de
+# grano (literatura de extensión, p. ej. Iowa State); la floración
+# ocurre hacia ~55% del ciclo térmico.
+# ORIENTATIVOS: pendientes de calibración local con la línea base D01
+# (F-09) y la variedad criolla de temporal de la Frailesca.
+# ------------------------------------------------------------------
+gdd_maiz:
+  temperatura_base_c: 10.0
+  ciclo_completo_gdd_c_aprox: 1530
+  floracion_gdd_c_aprox: 840
+  nota: "orientativos (literatura internacional); no usar como hechos calibrados sin validación local"
+
+# ------------------------------------------------------------------
+# PREFLIGHT DE VIABILIDAD (gate geográfico-agroclimático, se integra
+# ANTES del motor de reglas y del LLM). Responde la pregunta que la
+# humedad de suelo no puede responder: ¿es posible sembrar aquí en
+# absoluto? Evalúa COMPOSICIÓN y RÉGIMEN de la zona:
+#   1. TIERRA-AGUA  -> NO_VIABLE (hecho geográfico, confianza ALTA)
+#   2. RÉGIMEN TÉRMICO (GDD anual, heladas) -> NO_VIABLE (umbral HIPÓTESIS, MEDIA)
+#   3. RÉGIMEN HÍDRICO (precip anual) -> CONDICIONAL_RIEGO (continúa con aviso)
+# Veredicto NO_VIABLE => rechazo DETERMINISTA (no consulta LLM).
+# ------------------------------------------------------------------
+viabilidad:
+  nota_escala: "los umbrales térmico/hídricos son HIPÓTESIS de trabajo documentadas (pendientes de validación con la línea base D01); el gate geográfico es hecho físico (ALTA)"
+  gdd_min_maiz_c: 1200              # HIPÓTESIS: GDD anual base 10 °C mínimo para completar el ciclo de maíz de ciclo corto (coherente con gdd_maiz.ciclo_completo_gdd_c_aprox=1530 orientativo de ciclo largo)
+  dias_helada_max_ciclo: 15         # HIPÓTESIS: días de helada estimados DENTRO de la ventana de temporal (abr-oct); heladas invernales fuera de ventana no bloquean (el maíz de temporal no cruza el invierno)
+  precip_anual_min_temporal_mm: 400 # HIPÓTESIS: precipitación anual mínima para temporal sin riego -> degrada a CONDICIONAL_RIEGO, NO rechaza (el Norte/Bajío riegan)
+  fuentes:
+    mascara_tierra: "KINAL-main/05_DATA/reference/ne_50m_land.geojson (Natural Earth 50m, EV-0010)"
+    climatologia: "NASA POWER temporal/climatology/point T2M,T2M_MIN,PRECTOTCORR (EV-0011)"
+  # --- Fase B (pendiente de implementar): uso de suelo MODIS MCD12Q1 LC_Type1 vía AppEEARS ---
+  # Etiquetas IGBP corregidas respecto al borrador del plan (11 = humedales, no pastizal).
+  modis_clases:
+    prohibidas: [0, 13, 15, 16, 17]  # agua, urbano, nieve/hielo permanente, terreno desnudo, cuerpos de agua -> NO_VIABLE
+    permitidas: [12, 14]             # tierras de cultivo, mosaico cultivo/vegetación (evidencia de cultivo)
+    marginales: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]  # vegetación natural (bosque/arbusto/sabana/pastizal/humedal): sembrar requiere habilitación -> aviso
