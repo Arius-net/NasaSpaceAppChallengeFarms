@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-BACKEND_DIR = Path(__file__).resolve().parents[1]
+BACKEND_DIR = Path(__file__).resolve().parent.parent
 
 
 def _resolve_kinal_main_dir() -> Path:
@@ -19,16 +19,20 @@ def _resolve_kinal_main_dir() -> Path:
     candidates: list[Path] = []
     if override:
         candidates.append(Path(override))
-    candidates += [
-        BACKEND_DIR.parent / "KINAL-main",
-        BACKEND_DIR.parents[1] / "KINAL-main",
-        BACKEND_DIR / "KINAL-main",
-    ]
+    try:
+        candidates.append(BACKEND_DIR.parent / "KINAL-main")
+        candidates.append(BACKEND_DIR.parents[1] / "KINAL-main")
+    except IndexError:
+        pass
+    candidates.append(BACKEND_DIR / "KINAL-main")
+    candidates.append(Path.cwd() / "KINAL-main")
     for candidate in candidates:
-        if candidate.exists():
-            return candidate.resolve()
-    # Ubicación esperada por defecto (para mensajes de error claros)
-    return (BACKEND_DIR.parent / "KINAL-main").resolve()
+        try:
+            if candidate.exists():
+                return candidate.resolve()
+        except OSError:
+            continue
+    return BACKEND_DIR.resolve()
 
 
 KINAL_MAIN_DIR = _resolve_kinal_main_dir()
