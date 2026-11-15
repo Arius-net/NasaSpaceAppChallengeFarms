@@ -24,7 +24,7 @@ from services.decision_config import load_thresholds
 from services.decision_rules import cap_confianza_para
 from services.nasa_api import get_nasa_weather_data, get_recent_power_dataframe
 
-BACKEND_DIR = Path(__file__).resolve().parents[1]
+BACKEND_DIR = Path(__file__).resolve().parent.parent
 MODEL_DIR = BACKEND_DIR / "models"
 NATIONAL_BUNDLE_PATH = MODEL_DIR / "gwetroot_t7_national.joblib"
 NATIONAL_META_PATH = MODEL_DIR / "forecast_metadata_national.json"
