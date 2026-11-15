@@ -15,11 +15,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
-from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import requests
+
+from services.paths import CSV_POWER_FRAILESCA, FRAILESCA_BBOX
 
 POWER_URL = "https://power.larc.nasa.gov/api/temporal/daily/point"
 COMMUNITY = "AG"  # Agroclimatología
@@ -39,16 +41,13 @@ FILL = -999.0
 # Cache en memoria por coordenada redondeada (~1 km) para respuestas instantáneas al repetir clic
 _WEATHER_CACHE: dict[tuple[float, float], dict[str, Any]] = {}
 
-BACKEND_DIR = Path(__file__).resolve().parents[1]
-WORKSPACE_ROOT = BACKEND_DIR.parents[1]
-CSV_FALLBACK_PATH = (
-    WORKSPACE_ROOT
-    / "KINAL-main"
-    / "04_RESEARCH"
-    / "D01_inventory"
-    / "artifacts"
-    / "nasa_power_frailesca.csv"
-)
+
+def _en_frailesca(lat: float, lon: float) -> bool:
+    """True si la coordenada cae dentro del bbox del núcleo Frailesca (F-05)."""
+    return (
+        FRAILESCA_BBOX["lat_min"] <= lat <= FRAILESCA_BBOX["lat_max"]
+        and FRAILESCA_BBOX["lon_min"] <= lon <= FRAILESCA_BBOX["lon_max"]
+    )
 
 
 def resolve_location_name(lat: float, lon: float) -> dict[str, str]:
@@ -112,25 +111,35 @@ def _to_clean_dataframe(payload: dict[str, Any]) -> pd.DataFrame:
 
 
 def _extract_soil_moisture(df: pd.DataFrame) -> tuple[float, float, str]:
-    """Extrae GWETTOP y GWETROOT reales de NASA POWER (convertidos a cm³/cm³ volumétrico) o los estima."""
-    # En NASA POWER, GWETTOP y GWETROOT vienen como grado de saturación (0.0 a 1.0).
-    # Multiplicar por porosidad típica agrícola (~0.45 cm³/cm³) da el contenido volumétrico (cm³/cm³),
-    # compatible con los umbrales SMAP (0.25 superficial, 0.20 radicular).
+    """GWETTOP/GWETROOT NATIVOS de POWER (fracción de saturación 0-1), sin conversión.
+
+    Decisión 1.1-A: ya NO se multiplica por porosidad provisional — los umbrales
+    de config/decision_thresholds.yaml v0.3.0 están validados en esta misma
+    escala (EV-0009, serie multianual 2000-2025).
+    """
     has_gwettop = "GWETTOP" in df.columns and df["GWETTOP"].dropna().shape[0] > 0
     has_gwetroot = "GWETROOT" in df.columns and df["GWETROOT"].dropna().shape[0] > 0
 
     if has_gwettop and has_gwetroot:
-        gwet_top_raw = float(df["GWETTOP"].dropna().tail(5).mean())
-        gwet_root_raw = float(df["GWETROOT"].dropna().tail(5).mean())
-        sm_sup = round(max(0.05, min(0.48, gwet_top_raw * 0.45)), 3)
-        sm_rad = round(max(0.06, min(0.46, gwet_root_raw * 0.45)), 3)
-        return (sm_sup, sm_rad, "NASA POWER GLDAS (GWETTOP / GWETROOT real)")
+        sm_sup = float(np.clip(df["GWETTOP"].dropna().tail(5).mean(), 0.0, 1.0))
+        sm_rad = float(np.clip(df["GWETROOT"].dropna().tail(5).mean(), 0.0, 1.0))
+        return (
+            round(sm_sup, 3),
+            round(sm_rad, 3),
+            "NASA POWER GLDAS (GWETTOP/GWETROOT real, fracción 0-1)",
+        )
 
+    # Estimación heurística en fracción de saturación (solo cuando faltan GWET:
+    # respaldo D01 CSV o modo offline). Equivalente nativo de la heurística previa.
     recent_rain_7d = float(df["PRECTOTCORR"].tail(7).sum()) if "PRECTOTCORR" in df else 20.0
     mean_rh = float(df["RH2M"].tail(7).mean()) if "RH2M" in df else 65.0
-    sm_sup = min(0.42, max(0.08, 0.10 + (recent_rain_7d * 0.0035) + ((mean_rh - 55.0) * 0.0015)))
-    sm_rad = min(0.38, max(0.10, 0.12 + (recent_rain_7d * 0.0018) + ((mean_rh - 55.0) * 0.0010)))
-    return (round(sm_sup, 3), round(sm_rad, 3), "Balance Hídrico NASA POWER")
+    sm_sup = float(np.clip(0.22 + (recent_rain_7d * 0.0078) + ((mean_rh - 55.0) * 0.0033), 0.02, 1.0))
+    sm_rad = float(np.clip(0.27 + (recent_rain_7d * 0.0040) + ((mean_rh - 55.0) * 0.0022), 0.02, 1.0))
+    return (
+        round(sm_sup, 3),
+        round(sm_rad, 3),
+        "Estimación heurística POWER (sin GLDAS, fracción 0-1)",
+    )
 
 
 def _format_weather_output(
@@ -172,7 +181,7 @@ def _format_weather_output(
         "humedad_suelo_estimada": {
             "sm_superficial_v_v": sm_sup,
             "sm_radicular_v_v": sm_rad,
-            "unidad": "cm3/cm3",
+            "unidad": "fracción de saturación (0-1)",
             "fuente_humedad": sm_source,
         },
     }
@@ -247,6 +256,22 @@ def _query_nasa_power_window(
     return (_to_clean_dataframe(payload), server_dt)
 
 
+def get_recent_power_dataframe(lat: float, lon: float, days_back: int = 35, timeout_seconds: float = 8.0) -> pd.DataFrame:
+    """Serie diaria reciente de POWER (con GWET) para features de pronóstico (uso interno del servicio de forecast)."""
+    try:
+        candidate_end = datetime.now(UTC) - timedelta(days=5)
+        df, server_dt = _query_nasa_power_window(lat, lon, candidate_end, days_back=days_back, timeout_seconds=timeout_seconds)
+        valid_days = int(df["PRECTOTCORR"].notna().sum()) if "PRECTOTCORR" in df.columns else 0
+        if valid_days < 7 and server_dt is not None:
+            real_end = server_dt - timedelta(days=4)
+            df, _ = _query_nasa_power_window(lat, lon, real_end, days_back=days_back, timeout_seconds=timeout_seconds)
+        if "PRECTOTCORR" in df.columns and int(df["PRECTOTCORR"].notna().sum()) >= 7:
+            return df
+    except Exception:
+        pass
+    return pd.DataFrame()
+
+
 def get_nasa_weather_data(lat: float, lon: float, timeout_seconds: float = 8.0) -> dict[str, Any]:
     """Obtiene datos satelitales REALES de NASA POWER para cualquier coordenada de México."""
     cache_key = (round(lat, 3), round(lon, 3))
@@ -285,7 +310,35 @@ def get_nasa_weather_data(lat: float, lon: float, timeout_seconds: float = 8.0) 
     else:
         fallback_msg = "NASA POWER en mantenimiento temporal. Usando respaldo regional."
 
-    # Respaldo únicamente si no hay internet en el equipo
+    # Respaldo 1: CSV real versionado del inventario D01 (serie 2020-2025 del centro de la Frailesca).
+    # Solo se usa si la coordenada cae dentro del bbox Frailesca (F-05): el CSV es de un punto.
+    try:
+        if _en_frailesca(lat, lon) and CSV_POWER_FRAILESCA.exists():
+            df_csv = pd.read_csv(CSV_POWER_FRAILESCA)
+            df_csv["fecha"] = pd.to_datetime(df_csv["fecha"], errors="coerce")
+            df_csv = (
+                df_csv.dropna(subset=["fecha"])
+                .sort_values("fecha")
+                .set_index("fecha")
+                .drop(columns=["punto"], errors="ignore")
+                .tail(14)
+            )
+            if not df_csv.empty:
+                return _format_weather_output(
+                    df=df_csv,
+                    lat=lat,
+                    lon=lon,
+                    ubicacion=ubicacion,
+                    source_mode="FALLBACK_D01_CSV",
+                    fallback_reason=(
+                        f"{fallback_msg} Usando serie versionada del inventario D01 "
+                        "(nasa_power_frailesca.csv, punto centro)."
+                    ),
+                )
+    except Exception:
+        pass
+
+    # Respaldo 2: serie sintética (último recurso, solo si no hay internet ni CSV)
     fechas = pd.date_range(end=datetime.now(UTC).date(), periods=14, freq="D")
     synthetic_df = pd.DataFrame(
         {
