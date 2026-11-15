@@ -77,6 +77,24 @@ def get_forecast_endpoint(
 ) -> dict[str, Any]:
     """Pronóstico de GWETROOT a 7 días (banda 10-90%) con leyenda de degradación honesta (decisión 3.1)."""
     viab = evaluar_viabilidad(lat, lon)
+    if viab.get("veredicto") == "NO_VIABLE":
+        motivo = str(
+            viab.get(
+                "motivo",
+                "Ubicación no válida: Cuerpos de agua o polos no son aptos para agricultura.",
+            )
+        )
+        return {
+            "status": "no_viable",
+            "timestamp_pronostico": datetime.now(UTC).isoformat(),
+            "coordenadas": {"latitud": lat, "longitud": lon},
+            "motivo": motivo,
+            "viabilidad": viab,
+            "degradacion": {
+                "nivel": "no_viable",
+                "leyenda": motivo,
+            },
+        }
     resultado = get_forecast(lat, lon)
     resultado["viabilidad"] = viab
     return resultado
@@ -161,19 +179,9 @@ def _recomendar(
 ) -> dict[str, Any]:
     """Genera la recomendación y la registra (SQLite + espejo CSV 11_OUTPUTS)."""
     viab = evaluar_viabilidad(lat, lon)
-    weather_data = get_nasa_weather_data(lat=lat, lon=lon)
-    forecast_data = get_forecast(lat=lat, lon=lon)
 
     if viab.get("veredicto") == "NO_VIABLE":
         rec = mensaje_no_viable(viab, lat, lon)
-        serie = weather_data.get("serie_diaria", []) or []
-        rec["data_vintage"] = {
-            "fecha_dato": serie[-1].get("fecha") if serie else None,
-            "fuente": weather_data.get("fuente"),
-            "modo_extraccion": weather_data.get("modo_extraccion"),
-            "timestamp_consulta": weather_data.get("timestamp_consulta"),
-        }
-        rec["umbrales_aplicados"] = resumen_umbrales(load_thresholds())
         result: dict[str, Any] = {
             "status": "success",
             "timestamp_recomendacion": datetime.now(UTC).isoformat(),
@@ -181,18 +189,9 @@ def _recomendar(
                 "proveedor": "Preflight de viabilidad (determinista, sin LLM)",
                 "nota": "NO_VIABLE resuelto por composición/régimen de la zona; no se consultó LLM.",
             },
-            "coordenadas": weather_data.get("coordenadas", {"latitud": lat, "longitud": lon}),
+            "coordenadas": {"latitud": lat, "longitud": lon},
             "recomendacion_agronomica": rec,
             "viabilidad": viab,
-            "datos_meteorologicos": {
-                "fuente": weather_data.get("fuente"),
-                "modo_extraccion": weather_data.get("modo_extraccion"),
-                "resumen": weather_data.get("resumen_meteorologico"),
-                "serie_diaria": weather_data.get("serie_diaria"),
-            },
-            "pronostico": forecast_data.get("pronostico"),
-            "estado_actual": forecast_data.get("estado_actual"),
-            "forecast": forecast_data,
         }
         try:
             rid = log_recommendation(
@@ -216,6 +215,8 @@ def _recomendar(
             result["motor_ia"]["nota"] = f"{result['motor_ia']['nota']} | log: {exc}"
         return result
 
+    weather_data = get_nasa_weather_data(lat=lat, lon=lon)
+    forecast_data = get_forecast(lat=lat, lon=lon)
     result = generate_agronomic_recommendation(
         weather_data=weather_data, farm_context=farm_context
     )

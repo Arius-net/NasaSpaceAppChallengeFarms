@@ -79,21 +79,54 @@ def _cargar_mascara() -> list[dict] | None:
             return None
 
 
+LAT_MIN_CULTIVABLE = -50.0
+LAT_MAX_CULTIVABLE = 60.0
+MSG_AGUA_O_POLO = "Ubicación no válida: Cuerpos de agua o polos no son aptos para agricultura."
+
+
 def es_tierra(lat: float, lon: float) -> bool | None:
     """True=tierra, False=agua/hielo marino, None=no se puede evaluar (sin máscara)."""
+    if lat < LAT_MIN_CULTIVABLE or lat > LAT_MAX_CULTIVABLE:
+        return False
     features = _cargar_mascara()
-    if features is None:
-        return None
-    for feat in features:
-        geom = feat.get("geometry") or {}
-        if geom.get("type") == "Polygon":
-            if _punto_en_anillo(lon, lat, geom["coordinates"][0]):
-                return True
-        elif geom.get("type") == "MultiPolygon":
-            for poly in geom["coordinates"]:
-                if _punto_en_anillo(lon, lat, poly[0]):
+    if features is not None:
+        for feat in features:
+            geom = feat.get("geometry") or {}
+            if geom.get("type") == "Polygon":
+                if _punto_en_anillo(lon, lat, geom["coordinates"][0]):
                     return True
-    return False
+            elif geom.get("type") == "MultiPolygon":
+                for poly in geom["coordinates"]:
+                    if _punto_en_anillo(lon, lat, poly[0]):
+                        return True
+        return False
+
+    try:
+        resp = requests.get(
+            "https://nominatim.openstreetmap.org/reverse",
+            params={"lat": lat, "lon": lon, "format": "json", "zoom": 10},
+            headers={"User-Agent": "KINAL_NASA_SpaceApps_Mexico/1.0"},
+            timeout=4.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if "error" in data:
+                return False
+            if data.get("class") in ("natural", "waterway") and data.get("type") in (
+                "water",
+                "sea",
+                "ocean",
+                "bay",
+                "strait",
+                "reef",
+                "glacier",
+            ):
+                return False
+            addr = data.get("address") or {}
+            return bool(addr.get("country_code") or addr.get("country"))
+    except Exception:
+        pass
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -227,86 +260,89 @@ def evaluar_viabilidad(lat: float, lon: float) -> dict[str, Any]:
         )
         avisos.append("Climatología POWER no disponible: gates térmico/hídrico omitidos en esta consulta.")
 
-    if tierra is False:
+    if lat < LAT_MIN_CULTIVABLE or lat > LAT_MAX_CULTIVABLE:
+        ev["es_tierra"] = False
+        ev["en_rango_polar"] = True
         veredicto = {
             "veredicto": "NO_VIABLE",
             "nivel": "geografico",
-            "motivo": "La coordenada cae sobre agua o hielo marino (máscara Natural Earth): no existe suelo cultivable.",
+            "motivo": MSG_AGUA_O_POLO,
+            "confianza": "ALTA",
+        }
+    elif tierra is False:
+        veredicto = {
+            "veredicto": "NO_VIABLE",
+            "nivel": "geografico",
+            "motivo": MSG_AGUA_O_POLO,
             "confianza": "ALTA",
         }
     elif clim is not None:
-        if clim["gdd_anual_base10_c"] < gdd_min:
-            veredicto = {
-                "veredicto": "NO_VIABLE",
-                "nivel": "termico",
-                "motivo": (
-                    f"Régimen térmico incompatible con maíz: GDD anual {clim['gdd_anual_base10_c']:.0f} °C "
-                    f"< requisito de ciclo corto (~{gdd_min:.0f} °C, base 10 °C), con "
-                    f"{clim['dias_helada_estimados']:.0f} días de helada estimados. "
-                    "El maíz no completa su ciclo en esta zona."
-                ),
-                "confianza": "MEDIA",
-            }
-        elif clim["dias_helada_ventana_temporal"] > heladas_max:
-            veredicto = {
-                "veredicto": "NO_VIABLE",
-                "nivel": "termico",
-                "motivo": (
-                    f"Régimen de heladas incompatible con maíz de temporal: "
-                    f"{clim['dias_helada_ventana_temporal']:.0f} días de helada estimados DENTRO de "
-                    f"la ventana de temporal (abr-oct) > tolerancia (~{heladas_max:.0f}); "
-                    f"meses con helada invernal: {', '.join(clim['meses_helada_invernal']) or 'ninguno'}."
-                ),
-                "confianza": "MEDIA",
-            }
+        detenido = False
+        lc = obtener_clase_uso_suelo(lat, lon)
+        if lc is None:
+            avisos.append(
+                "Uso de suelo MODIS (AppEEARS) no disponible en esta consulta: "
+                "gate de composición omitido; se evaluó solo régimen climático."
+            )
         else:
-            detenido = False
-            lc = obtener_clase_uso_suelo(lat, lon)
-            if lc is None:
+            ev["modis_clase_lc_type1"] = lc["clase"]
+            ev["modis_clase_nombre"] = lc["nombre"]
+            ev["modis_anio"] = lc.get("anio")
+            if lc["clase"] in (0, 15, 17):
+                veredicto = {
+                    "veredicto": "NO_VIABLE",
+                    "nivel": "geografico",
+                    "motivo": MSG_AGUA_O_POLO,
+                    "confianza": "ALTA",
+                }
+                detenido = True
+            elif lc["clase"] in modis_prohibidas:
+                veredicto = {
+                    "veredicto": "NO_VIABLE",
+                    "nivel": "composicion",
+                    "motivo": (
+                        f"Por la composición de la zona no se puede plantar: uso de suelo "
+                        f"clasificado como {lc['nombre']} (clase {lc['clase']}, MODIS "
+                        f"MCD12Q1 {lc.get('anio') or 'último disponible'})."
+                    ),
+                    "confianza": "MEDIA",
+                }
+                detenido = True
+            elif lc["clase"] not in modis_permitidas and lc["clase"] in modis_marginales:
                 avisos.append(
-                    "Uso de suelo MODIS (AppEEARS) no disponible en esta consulta: "
-                    "gate de composición omitido; se evaluó solo régimen climático."
+                    f"Uso de suelo MODIS = {lc['nombre']} (clase {lc['clase']}): sembrar maíz "
+                    "requiere habilitación de la parcela (no es tierra de cultivo activa)."
                 )
+        if not detenido:
+            if clim["gdd_anual_base10_c"] < gdd_min or clim["dias_helada_ventana_temporal"] > heladas_max:
+                veredicto = {
+                    "veredicto": "CONDICIONAL_RIEGO",
+                    "nivel": "termico",
+                    "motivo": (
+                        f"Régimen térmico templado/frío (GDD anual {clim['gdd_anual_base10_c']:.0f} °C, "
+                        f"heladas abr-oct: {clim['dias_helada_ventana_temporal']:.0f} días): "
+                        "se recomiendan híbridos de ciclo corto o cultivos adaptados."
+                    ),
+                    "confianza": "MEDIA",
+                }
+            elif clim["precip_anual_mm"] < precip_min:
+                veredicto = {
+                    "veredicto": "CONDICIONAL_RIEGO",
+                    "nivel": "hidrico",
+                    "motivo": (
+                        f"Precipitación anual ({clim['precip_anual_mm']:.0f} mm) insuficiente "
+                        f"para maíz de temporal sin riego (~{precip_min:.0f} mm): viable "
+                        "SOLO con riego. Evaluando humedad y decisión con esa condición."
+                    ),
+                    "confianza": "MEDIA",
+                }
             else:
-                ev["modis_clase_lc_type1"] = lc["clase"]
-                ev["modis_clase_nombre"] = lc["nombre"]
-                ev["modis_anio"] = lc.get("anio")
-                if lc["clase"] in modis_prohibidas:
-                    veredicto = {
-                        "veredicto": "NO_VIABLE",
-                        "nivel": "composicion",
-                        "motivo": (
-                            f"Por la composición de la zona no se puede plantar: uso de suelo "
-                            f"clasificado como {lc['nombre']} (clase {lc['clase']}, MODIS "
-                            f"MCD12Q1 {lc.get('anio') or 'último disponible'})."
-                        ),
-                        "confianza": "MEDIA",
-                    }
-                    detenido = True
-                elif lc["clase"] not in modis_permitidas and lc["clase"] in modis_marginales:
-                    avisos.append(
-                        f"Uso de suelo MODIS = {lc['nombre']} (clase {lc['clase']}): sembrar maíz "
-                        "requiere habilitación de la parcela (no es tierra de cultivo activa)."
-                    )
-            if not detenido:
-                if clim["precip_anual_mm"] < precip_min:
-                    veredicto = {
-                        "veredicto": "CONDICIONAL_RIEGO",
-                        "nivel": "hidrico",
-                        "motivo": (
-                            f"Precipitación anual ({clim['precip_anual_mm']:.0f} mm) insuficiente "
-                            f"para maíz de temporal sin riego (~{precip_min:.0f} mm): viable "
-                            "SOLO con riego. Evaluando humedad y decisión con esa condición."
-                        ),
-                        "confianza": "MEDIA",
-                    }
-                else:
-                    veredicto = {
-                        "veredicto": "VIABLE",
-                        "nivel": None,
-                        "motivo": "Zona viable para maíz de temporal según máscara geográfica, uso de suelo y régimen climático.",
-                        "confianza": "ALTA",
-                    }
+                veredicto = {
+                    "veredicto": "VIABLE",
+                    "nivel": None,
+                    "motivo": "Zona viable para agricultura según máscara geográfica, uso de suelo y régimen climático.",
+                    "confianza": "ALTA",
+                }
     if veredicto is None:
         veredicto = {
             "veredicto": "VIABLE",
