@@ -33,7 +33,7 @@ from services.decision_rules import (
 )
 
 
-def build_system_prompt() -> str:
+def build_system_prompt(farm_context: str | None = None) -> str:
     """Construye el prompt de sistema a partir del YAML de umbrales (fuente única)."""
     cfg = load_thresholds()
     confianza_max = cfg.get("confianza_max", "MEDIA")
@@ -41,6 +41,12 @@ def build_system_prompt() -> str:
         "VALIDADOS con evidencia"
         if cfg.get("validated")
         else "AÚN NO VALIDADOS (hipótesis de trabajo, Q-01/D03 abierta)"
+    )
+    context_block = (
+        "\nToma en cuenta el siguiente historial de la parcela y tipo de suelo del agricultor "
+        f"para personalizar la recomendación:\n{farm_context}\n\n"
+        if farm_context
+        else ""
     )
     return (
         "Eres el Ingeniero Agrónomo Principal del sistema K'INAL (NASA Space Apps Challenge), "
@@ -51,6 +57,7 @@ def build_system_prompt() -> str:
         "Tu objetivo es analizar los datos meteorológicos y de humedad del suelo REALES provenientes "
         "de NASA POWER y GLDAS para el municipio, estado y coordenadas indicadas, y emitir una "
         "recomendación práctica, clara y trazable para el agricultor de esa región.\n\n"
+        f"{context_block}"
         f"{texto_reglas_para_prompt()}\n"
         "REGLAS DE SALIDA:\n"
         "- DEBES responder ÚNICAMENTE con un objeto JSON válido con esta estructura exacta:\n"
@@ -94,13 +101,15 @@ def _extract_json_block(raw_text: str) -> dict[str, Any]:
     return json.loads(cleaned)
 
 
-def _call_gemini_api(user_prompt: str, api_key: str) -> dict[str, Any]:
+def _call_gemini_api(
+    user_prompt: str, api_key: str, farm_context: str | None = None
+) -> dict[str, Any]:
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
         f"gemini-2.0-flash:generateContent?key={api_key}"
     )
     payload = {
-        "system_instruction": {"parts": [{"text": build_system_prompt()}]},
+        "system_instruction": {"parts": [{"text": build_system_prompt(farm_context)}]},
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
         "generationConfig": {
             "temperature": 0.0,
@@ -114,7 +123,9 @@ def _call_gemini_api(user_prompt: str, api_key: str) -> dict[str, Any]:
     return _extract_json_block(text)
 
 
-def _call_openai_api(user_prompt: str, api_key: str) -> dict[str, Any]:
+def _call_openai_api(
+    user_prompt: str, api_key: str, farm_context: str | None = None
+) -> dict[str, Any]:
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -123,7 +134,7 @@ def _call_openai_api(user_prompt: str, api_key: str) -> dict[str, Any]:
     payload = {
         "model": "gpt-4o-mini",
         "messages": [
-            {"role": "system", "content": build_system_prompt()},
+            {"role": "system", "content": build_system_prompt(farm_context)},
             {"role": "user", "content": user_prompt},
         ],
         "temperature": 0.0,
@@ -336,7 +347,9 @@ def _enrich_recommendation(
     return payload
 
 
-def generate_agronomic_recommendation(weather_data: dict[str, Any]) -> dict[str, Any]:
+def generate_agronomic_recommendation(
+    weather_data: dict[str, Any], farm_context: str | None = None
+) -> dict[str, Any]:
     """Orquesta la generación del consejo agronómico usando LLM o Motor Nacional K'INAL."""
     user_prompt = _build_user_prompt(weather_data)
 
@@ -349,14 +362,14 @@ def generate_agronomic_recommendation(weather_data: dict[str, Any]) -> dict[str,
 
     if gemini_key:
         try:
-            recommendation_payload = _call_gemini_api(user_prompt, gemini_key)
+            recommendation_payload = _call_gemini_api(user_prompt, gemini_key, farm_context)
             llm_provider = "Google Gemini 2.0 Flash"
         except Exception as exc:
             llm_error = f"Gemini fallback: {exc}"
 
     if recommendation_payload is None and openai_key:
         try:
-            recommendation_payload = _call_openai_api(user_prompt, openai_key)
+            recommendation_payload = _call_openai_api(user_prompt, openai_key, farm_context)
             llm_provider = "OpenAI GPT-4o-mini"
         except Exception as exc:
             llm_error = f"OpenAI fallback: {exc}"

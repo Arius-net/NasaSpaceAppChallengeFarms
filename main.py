@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from services.ai_advisor import generate_agronomic_recommendation
 from services.decision_config import load_thresholds, reload_thresholds, resumen_umbrales
+from services.farm_history import get_farm_context_for_llm
 from services.forecast import cargar_metadata, get_forecast, modelo_disponible, recargar_modelo
 from services.geo_viability import evaluar_viabilidad, mensaje_no_viable
 from services.land_cover import precargar_puntos
@@ -56,6 +57,7 @@ app.add_middleware(
 class CoordinateRequest(BaseModel):
     lat: float = Field(16.2333, ge=-90.0, le=90.0, description="Latitud de la parcela")
     lon: float = Field(-93.2667, ge=-180.0, le=180.0, description="Longitud de la parcela")
+    farm_id: str | None = Field(None, description="ID de la parcela en Supabase (opcional)")
 
 
 @app.get("/api/forecast", tags=["Forecast"])
@@ -171,7 +173,9 @@ def get_weather(
     return get_nasa_weather_data(lat=lat, lon=lon)
 
 
-def _recomendar(lat: float, lon: float) -> dict[str, Any]:
+def _recomendar(
+    lat: float, lon: float, farm_context: str | None = None
+) -> dict[str, Any]:
     """Genera la recomendación y la registra (SQLite + espejo CSV 11_OUTPUTS).
 
     Preflight de viabilidad ANTES del motor de reglas y del LLM (gate geográfico):
@@ -221,7 +225,9 @@ def _recomendar(lat: float, lon: float) -> dict[str, Any]:
 
     # ---- Flujo normal (VIABLE o CONDICIONAL_RIEGO) ----
     weather_data = get_nasa_weather_data(lat=lat, lon=lon)
-    result = generate_agronomic_recommendation(weather_data=weather_data)
+    result = generate_agronomic_recommendation(
+        weather_data=weather_data, farm_context=farm_context
+    )
     rec = result.get("recomendacion_agronomica", {})
     if viab.get("veredicto") == "CONDICIONAL_RIEGO":
         rec.setdefault("supuestos", []).append(
@@ -268,9 +274,17 @@ def get_recommendation(
 
 
 @app.post("/api/recommendation", tags=["AI Agronomic Advisor"])
-def post_recommendation(body: CoordinateRequest) -> dict[str, Any]:
+async def post_recommendation(body: CoordinateRequest) -> dict[str, Any]:
     """Orquesta la consulta climática a la NASA y genera la recomendación agronómica con IA (POST)."""
-    return _recomendar(body.lat, body.lon)
+    farm_context = ""
+    if body.farm_id:
+        try:
+            ctx = await get_farm_context_for_llm(body.farm_id)
+            if ctx and not ctx.startswith("CONTEXTO DE PARCELA"):
+                farm_context = ctx
+        except Exception:  # noqa: BLE001
+            farm_context = ""
+    return _recomendar(body.lat, body.lon, farm_context=farm_context or None)
 
 
 @app.post("/api/recommendations/{recommendation_id}/override", tags=["AI Agronomic Advisor"])
