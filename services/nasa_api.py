@@ -76,21 +76,22 @@ def resolve_location_name(lat: float, lon: float) -> dict[str, str]:
                 or addr.get("village")
                 or "Zona Rural"
             )
-            estado = addr.get("state") or addr.get("region") or "México"
-            pais = addr.get("country") or "México"
+            estado = addr.get("state") or addr.get("region") or "Región"
+            pais = addr.get("country") or "Norteamérica"
+            nombre = f"{municipio}, {estado}" if "m" in pais.lower() else f"{municipio}, {estado}, {pais}"
             return {
                 "municipio": municipio,
                 "estado": estado,
                 "pais": pais,
-                "nombre_completo": f"{municipio}, {estado}",
+                "nombre_completo": nombre,
             }
     except Exception:
         pass
 
     return {
         "municipio": f"Parcela ({lat:.2f}, {lon:.2f})",
-        "estado": "México",
-        "pais": "México",
+        "estado": "Global",
+        "pais": "Global",
         "nombre_completo": f"Coordenada ({lat:.3f}°, {lon:.3f}°)",
     }
 

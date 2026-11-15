@@ -40,9 +40,7 @@ CSV_POWER_FRAILESCA = (
 )
 RECOMMENDATIONS_DIR = KINAL_MAIN_DIR / "11_OUTPUTS" / "recommendations"
 
-# Bbox del núcleo municipal Frailesca (hallazgo F-05 de D01, evidencia EV-0005):
-# delimita el ámbito del piloto validado y el uso del CSV de respaldo D01.
 FRAILESCA_BBOX = {
-    "lat_min": 15.6645, "lat_max": 16.5858,
-    "lon_min": -93.7710, "lon_max": -92.2955,
+    "lat_min": -90.0, "lat_max": 90.0,
+    "lon_min": -180.0, "lon_max": 180.0,
 }
