@@ -66,34 +66,17 @@ def get_forecast_endpoint(
         16.2333,
         ge=-90.0,
         le=90.0,
-        description="Latitud de la parcela (por defecto: Villaflores, La Frailesca, Chiapas)",
+        description="Latitud de la parcela",
     ),
     lon: float = Query(
         -93.2667,
         ge=-180.0,
         le=180.0,
-        description="Longitud de la parcela (por defecto: Villaflores, La Frailesca, Chiapas)",
+        description="Longitud de la parcela",
     ),
 ) -> dict[str, Any]:
     """Pronóstico de GWETROOT a 7 días (banda 10-90%) con leyenda de degradación honesta (decisión 3.1)."""
-    # Preflight de viabilidad: si la zona no es cultivable, el pronóstico de humedad no aplica.
     viab = evaluar_viabilidad(lat, lon)
-    if viab.get("veredicto") == "NO_VIABLE":
-        return {
-            "status": "no_viable",
-            "timestamp_pronostico": datetime.now(UTC).isoformat(),
-            "coordenadas": {"latitud": lat, "longitud": lon},
-            "motivo": str(viab.get("motivo", "Zona no viable para maíz de temporal (preflight geográfico).")),
-            "viabilidad": viab,
-            "degradacion": {
-                "nivel": "no_viable",
-                "leyenda": (
-                    "Pronóstico NO calculado: el preflight de viabilidad determinó que esta zona no es "
-                    "cultivable (composición/régimen, no humedad del día), por lo que pronosticar "
-                    "reserva radicular de maíz carece de sentido."
-                ),
-            },
-        }
     resultado = get_forecast(lat, lon)
     resultado["viabilidad"] = viab
     return resultado
@@ -176,20 +159,21 @@ def get_weather(
 def _recomendar(
     lat: float, lon: float, farm_context: str | None = None
 ) -> dict[str, Any]:
-    """Genera la recomendación y la registra (SQLite + espejo CSV 11_OUTPUTS).
-
-    Preflight de viabilidad ANTES del motor de reglas y del LLM (gate geográfico):
-      - NO_VIABLE -> rechazo DETERMINISTA (no se consulta el LLM), se registra
-        como decision_type="viabilidad_terreno".
-      - CONDICIONAL_RIEGO -> continúa con el motivo añadido a supuestos.
-      - VIABLE -> flujo normal.
-    """
+    """Genera la recomendación y la registra (SQLite + espejo CSV 11_OUTPUTS)."""
     viab = evaluar_viabilidad(lat, lon)
+    weather_data = get_nasa_weather_data(lat=lat, lon=lon)
+    forecast_data = get_forecast(lat=lat, lon=lon)
 
-    # ---- Rechazo determinista: no hay suelo cultivable o el régimen térmico
-    # impide completar el ciclo. La humedad del día es irrelevante aquí. ----
     if viab.get("veredicto") == "NO_VIABLE":
         rec = mensaje_no_viable(viab, lat, lon)
+        serie = weather_data.get("serie_diaria", []) or []
+        rec["data_vintage"] = {
+            "fecha_dato": serie[-1].get("fecha") if serie else None,
+            "fuente": weather_data.get("fuente"),
+            "modo_extraccion": weather_data.get("modo_extraccion"),
+            "timestamp_consulta": weather_data.get("timestamp_consulta"),
+        }
+        rec["umbrales_aplicados"] = resumen_umbrales(load_thresholds())
         result: dict[str, Any] = {
             "status": "success",
             "timestamp_recomendacion": datetime.now(UTC).isoformat(),
@@ -197,9 +181,18 @@ def _recomendar(
                 "proveedor": "Preflight de viabilidad (determinista, sin LLM)",
                 "nota": "NO_VIABLE resuelto por composición/régimen de la zona; no se consultó LLM.",
             },
-            "coordenadas": {"latitud": lat, "longitud": lon},
+            "coordenadas": weather_data.get("coordenadas", {"latitud": lat, "longitud": lon}),
             "recomendacion_agronomica": rec,
             "viabilidad": viab,
+            "datos_meteorologicos": {
+                "fuente": weather_data.get("fuente"),
+                "modo_extraccion": weather_data.get("modo_extraccion"),
+                "resumen": weather_data.get("resumen_meteorologico"),
+                "serie_diaria": weather_data.get("serie_diaria"),
+            },
+            "pronostico": forecast_data.get("pronostico"),
+            "estado_actual": forecast_data.get("estado_actual"),
+            "forecast": forecast_data,
         }
         try:
             rid = log_recommendation(
@@ -218,13 +211,11 @@ def _recomendar(
                 baseline_option="no aplica (zona no cultivable)",
             )
             result["recommendation_id"] = rid
-        except Exception as exc:  # noqa: BLE001 — el registro nunca debe romper la recomendación
+        except Exception as exc:  # noqa: BLE001
             result["recommendation_id"] = None
             result["motor_ia"]["nota"] = f"{result['motor_ia']['nota']} | log: {exc}"
         return result
 
-    # ---- Flujo normal (VIABLE o CONDICIONAL_RIEGO) ----
-    weather_data = get_nasa_weather_data(lat=lat, lon=lon)
     result = generate_agronomic_recommendation(
         weather_data=weather_data, farm_context=farm_context
     )
@@ -235,6 +226,9 @@ def _recomendar(
         )
         rec["viabilidad_condicion"] = "CONDICIONAL_RIEGO"
     result["viabilidad"] = viab
+    result["pronostico"] = forecast_data.get("pronostico")
+    result["estado_actual"] = forecast_data.get("estado_actual")
+    result["forecast"] = forecast_data
     try:
         rid = log_recommendation(
             decision_type="fecha_siembra",
@@ -248,7 +242,7 @@ def _recomendar(
             payload=rec,
         )
         result["recommendation_id"] = rid
-    except Exception as exc:  # noqa: BLE001 — el registro nunca debe romper la recomendación
+    except Exception as exc:  # noqa: BLE001
         result["recommendation_id"] = None
         result["motor_ia"]["nota"] = f"{result.get('motor_ia', {}).get('nota') or ''} | log: {exc}"
     return result

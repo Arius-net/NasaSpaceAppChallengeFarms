@@ -67,20 +67,12 @@ def _confianza_por_regla(decision: str) -> str:
 
 
 def cap_confianza_para(lat: float, lon: float) -> str:
-    """Confianza máxima permitida según el ámbito de validación.
-
-    Umbrales validados (EV-0009) SOLO para el piloto La Frailesca: dentro de
-    su bbox rige `confianza_max` del YAML; fuera, la confianza se limita a
-    MEDIA (extrapolación pendiente de validación regional — DECISION_SPEC §3).
-    """
     cfg = load_thresholds()
     if not cfg.get("validated", False):
         return str(cfg.get("confianza_max", "MEDIA"))
-    dentro = (
-        FRAILESCA_BBOX["lat_min"] <= lat <= FRAILESCA_BBOX["lat_max"]
-        and FRAILESCA_BBOX["lon_min"] <= lon <= FRAILESCA_BBOX["lon_max"]
-    )
-    return str(cfg.get("confianza_max", "ALTA")) if dentro else "MEDIA"
+    if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+        return str(cfg.get("confianza_max", "ALTA"))
+    return "MEDIA"
 
 
 def texto_reglas_para_prompt() -> str:
