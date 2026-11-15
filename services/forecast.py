@@ -26,6 +26,8 @@ from services.nasa_api import get_nasa_weather_data, get_recent_power_dataframe
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 MODEL_DIR = BACKEND_DIR / "models"
+NATIONAL_BUNDLE_PATH = MODEL_DIR / "gwetroot_t7_national.joblib"
+NATIONAL_META_PATH = MODEL_DIR / "forecast_metadata_national.json"
 BUNDLE_PATH = MODEL_DIR / "gwetroot_t7.joblib"
 META_PATH = MODEL_DIR / "forecast_metadata.json"
 
@@ -36,16 +38,20 @@ _lock = threading.Lock()
 def _cargar_modelo() -> dict[str, Any] | None:
     """Carga el bundle de modelos cuantílicos (cacheado)."""
     with _lock:
-        if not BUNDLE_PATH.exists():
+        bundle_path = NATIONAL_BUNDLE_PATH if NATIONAL_BUNDLE_PATH.exists() else BUNDLE_PATH
+        if not bundle_path.exists():
             return None
-        return joblib.load(BUNDLE_PATH)
+        bundle = joblib.load(bundle_path)
+        bundle["_scope"] = "nacional" if bundle_path == NATIONAL_BUNDLE_PATH else "piloto"
+        return bundle
 
 
 @lru_cache(maxsize=1)
 def cargar_metadata() -> dict[str, Any] | None:
-    if not META_PATH.exists():
+    metadata_path = NATIONAL_META_PATH if NATIONAL_META_PATH.exists() else META_PATH
+    if not metadata_path.exists():
         return None
-    with open(META_PATH, "r", encoding="utf-8") as fh:
+    with open(metadata_path, "r", encoding="utf-8") as fh:
         return json.load(fh)
 
 
@@ -79,6 +85,8 @@ def _preparar_serie_completa(df: pd.DataFrame, lat: float, lon: float) -> pd.Dat
                 index=pd.to_datetime([d.get("fecha") for d in serie], errors="coerce"),
             )
     df = df.copy()
+    df["LATITUDE"] = float(lat)
+    df["LONGITUDE"] = float(lon)
     defaults = {
         "PRECTOTCORR": 0.0,
         "T2M_MAX": 25.0,
@@ -231,13 +239,19 @@ def get_forecast(lat: float, lon: float, timeout_seconds: float = 8.0) -> dict[s
         "confianza_max": cap,
         "modelo": {
             "tipo": "XGBoost cuantílico 0.10/0.50/0.90",
+            "alcance": bundle.get("_scope", "piloto"),
             "entrenado_hasta": metadata.get("datos", {}).get("fin"),
             "metricas_test": metadata.get("metricas_test"),
             "escala": "fracción de saturación 0-1 (nativa, EV-0009)",
         },
         "supuestos": [
-            "Pronóstico basado en la serie reciente de NASA POWER (punto piloto entrenado en "
-            "Villaflores); fuera del piloto es extrapolación.",
+            (
+                "Pronóstico basado en una serie reciente de NASA POWER y un modelo nacional "
+                "con variables espaciales."
+                if bundle.get("_scope") == "nacional"
+                else "Pronóstico basado en la serie reciente de NASA POWER (punto piloto entrenado en "
+                "Villaflores); fuera del piloto es extrapolación."
+            ),
             "La banda 10-90% refleja la incertidumbre del modelo, no la de las observaciones "
             "futuras (GLDAS ~0.5°×0.625°).",
             "Los umbrales usados provienen de decision_thresholds.yaml (EV-0009).",
